@@ -1,0 +1,47 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(block.protocol)
+```
+
+```{r fig.width = 10, fig.height = 10}
+overlay <- overlay_game(
+  n = 13,
+  n_storage_nodes = 6,
+  max_outgoing_conn = 2,
+  max_total_conn = 10
+)
+```
+
+```{r}
+g_n <- overlay |> as_graph()
+g_bl <- overlay |> as_graph(block_flow_graph = TRUE)
+```
+
+```{r}
+layout <- layout_with_fr(g_n)
+```
+
+```{r fig.width = 10, fig.height = 10}
+plot(g_n, 
+     rescale=FALSE, 
+     ylim = c(-6,6), 
+     layout = layout, 
+     vertex.size = 30, 
+     vertex.label = NA)
+```
+
+```{r fig.width = 10, fig.height = 10}
+plot(g_bl, 
+     rescale=FALSE, 
+     ylim = c(-6,6), 
+     layout = layout, 
+     vertex.size = 30, 
+     vertex.label = NA)
+```
+
+
