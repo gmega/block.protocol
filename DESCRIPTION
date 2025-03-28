@@ -1,0 +1,25 @@
+Package: block.protocol
+Type: Package
+Title: What the Package Does (Title Case)
+Version: 0.1.0
+Authors@R: c(
+    person(
+      "Jane", "Doe",
+      email = "jane@example.com",
+      role = c("aut", "cre")
+    )
+  )
+Description: More about what it does (maybe more than one line).
+    Continuation lines should be indented.
+License: What license is it under?
+Encoding: UTF-8
+LazyData: true
+Depends:
+    igraph (>= 2.1.4),
+    tidyverse (>= 2.0.0),
+    glue (>= 1.8.0),
+    R6 (>= 2.6.1),
+    result (>= 0.1.0)
+Suggests: 
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3
