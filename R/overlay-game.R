@@ -1,3 +1,4 @@
+# @export
 overlay_game <- function(
   n,
   n_storage_nodes,
@@ -34,6 +35,7 @@ overlay_game <- function(
   )
 }
 
+# @export
 as_graph <- function(
   overlay,
   block_flow_graph = FALSE,

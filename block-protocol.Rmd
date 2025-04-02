@@ -6,12 +6,13 @@ output: html_notebook
 
 ```{r}
 library(block.protocol)
+library(bit64)
 ```
 
 ```{r fig.width = 10, fig.height = 10}
 overlay <- overlay_game(
-  n = 13,
-  n_storage_nodes = 6,
+  n = 48,
+  n_storage_nodes = 24,
   max_outgoing_conn = 2,
   max_total_conn = 10
 )
@@ -27,7 +28,7 @@ layout <- layout_with_fr(g_n)
 ```
 
 ```{r fig.width = 10, fig.height = 10}
-plot(g_n, 
+plot(g_bl,
      rescale=FALSE, 
      ylim = c(-6,6), 
      layout = layout, 
@@ -36,7 +37,7 @@ plot(g_n,
 ```
 
 ```{r fig.width = 10, fig.height = 10}
-plot(g_bl, 
+plot(g_bl,
      rescale=FALSE, 
      ylim = c(-6,6), 
      layout = layout, 
@@ -44,4 +45,111 @@ plot(g_bl,
      vertex.label = NA)
 ```
 
+
+
+```{r}
+binom <- function(n, k) {
+  if (n < k) {
+    return(0)
+  }
+  
+  prod(
+    sapply(
+      0:(k - 1), 
+      function(i) (n - i) / (k - i)
+    )
+  )
+}
+
+coupon <- function(N, k) {
+  sum(sapply(1:as.integer(N-1), function(s){
+    # Need to do some other transforms to prevent this from overflowing so early.
+    ((-1)^(s+1) * binom(N - 1, s)) / (1 - binom(N - s - 1, k) / binom(N - 1, k))
+  }))
+}
+```
+
+
+```{r}
+sim <- function(N, k) {
+  seen <- NULL
+  i <- 0
+  while (length(seen) != N - 1) {
+    seen <- unique(c(seen, sample(N - 1, k)))
+    i <- i + 1
+  }
+  i
+}
+
+coupon_mean <- function(N, k, n = 1000) {
+  mean(sapply(1:n, function(i) sim(N, k)))
+}
+```
+
+```{r}
+estimate <- function(n_range, k, sim_reps = 1000) {
+  expectations <- tibble(
+    n = n_range,
+    d = as.numeric(sapply(n_range, function(n) coupon(n, k))),
+    d_sim = sapply(n_range, function(n) coupon_mean(n, k, sim_reps)),
+    k = k
+  ) |> 
+    pivot_longer(-c(n, k), names_to = 'type', values_to = 'expectation')
+  
+  interpolation <- local({
+    sims <- expectations |> filter(type == 'd_sim')
+    lm(expectation ~ n, data = sims)
+  })
+  
+  expectations <- expectations |> rbind(
+    tibble(
+      n = n_range,
+      expectation = predict(interpolation, newdata = tibble(n = n_range)),
+      type = 'd_pred',
+      k = k
+    )
+  ) |> 
+    mutate(slope = coef(interpolation)[2])
+  
+  expectations  
+}
+```
+
+
+```{r}
+expectations <- parallel::mclapply(
+  list(10, 20, 30, 40, 50),
+  function(k) estimate((k + 1):1000, k),
+  mc.cores = 4
+) |> bind_rows()
+```
+
+
+```{r fig.width = 10, fig.height=5}
+ggplot(expectations |> filter(k == 10, type %in% c('d_sim', 'd_pred'))) +
+  xlab('number of storage providers (|N|)') +
+  ylab(expression('expected number of samples ('*D[N*','*k]*')')) +
+  theme_minimal(base_size = 20) +
+  geom_line(aes(x = n, y = expectation, col = type), lwd = 2) +
+  scale_color_manual(labels = c('d_sim' = 'actual', 'd_pred' = 'predicted'), values = c('black', 'blue'))
+```
+
+```{r fig.width = 10, fig.height=5}
+ggplot(expectations |> group_by(k, slope) |> summarise(.groups = 'drop')) +
+  geom_bar(aes(x = k, y = slope), stat = 'identity', fill = 'lightblue') +
+  xlab('samples per draw (k)') +
+  ylab(expression('growth slope ('*a[k]*')')) +
+  theme_minimal(base_size = 20)
+```
+```{r fig.width = 10, fig.height=5}
+ggplot(expectations |> group_by(k, slope) |> summarise(.groups = 'drop')  |>
+         mutate(amplification = k * slope), aes(x = k, y = amplification)) +
+  geom_line(lwd = 1) +
+  geom_point(size = 4) +
+  ylim(c(6,8)) +
+  xlab('samples per draw') +
+  ylab(expression('amplification factor ('*alpha[k]*')')) +
+  theme_minimal(base_size = 20)
+```
+```
 
