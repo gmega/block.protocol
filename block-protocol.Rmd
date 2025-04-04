@@ -127,7 +127,7 @@ expectations <- parallel::mclapply(
 
 ```{r fig.width = 10, fig.height=5}
 ggplot(expectations |> filter(k == 10, type %in% c('d_sim', 'd_pred'))) +
-  xlab('number of storage providers (|N|)') +
+  xlab(expression('network size (|N| = |'*S[F]*'|' + 1*')')) +
   ylab(expression('expected number of samples ('*D[N*','*k]*')')) +
   theme_minimal(base_size = 20) +
   geom_line(aes(x = n, y = expectation, col = type), lwd = 2) +
