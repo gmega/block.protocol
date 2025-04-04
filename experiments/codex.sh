@@ -72,11 +72,11 @@ launch_codex_network() {
 }
 
 # Create a random file with specified block size and count
-# Usage: create_file <block_size> <block_count>
+# Usage: create_file <block_size> <block_count> [output_file]
 create_file() {
     local block_size=$1
     local block_count=$2
-    local output_file="/tmp/testfile"
+    local output_file=${3:-"/tmp/testfile"}
     
     echoerr "Creating file with block size: ${block_size}, block count: ${block_count}"
     dd if=/dev/urandom of=${output_file} bs=${block_size} count=${block_count} &> /dev/null
@@ -88,19 +88,19 @@ create_file() {
 # Returns: Content ID (CID) of the uploaded file
 upload() {
     local node_index=$1
-    local file_path=$2
+    local file_path=${2:-"/tmp/testfile"}
     local api_port=$((8080 + node_index - 1))
     
     echoerr "Uploading file to node ${node_index} (port: ${api_port})"
-    local cid=$(curl -s -X POST -T "${file_path}" http://localhost:${api_port}/api/codex/v1/data)
-    echo ${cid}
+    last_upload_cid=$(curl -s -X POST -T "${file_path}" http://localhost:${api_port}/api/codex/v1/data)
+    echo ${last_upload_cid}
 }
 
 # Download a file from a specified node
 # Usage: download <node_index> <cid>
 download() {
     local node_index=$1
-    local cid=$2
+    local cid=${2:-${last_upload_cid}}
     local api_port=$((8080 + node_index - 1))
     
     echoerr "Downloading file from node ${node_index} (port: ${api_port})"
