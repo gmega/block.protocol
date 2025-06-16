@@ -1,6 +1,27 @@
+#!/usr/bin/env bash
 #
 # Utility functions for managing Codex nodes
 #
+set -e
+
+# Node logs will be placed here.
+export CODEX_LOGS=${CODEX_LOGS:-"./codex-logs"}
+# Nodes data dirs will be placed here.
+export CODEX_DATA=${CODEX_DATA:-"./codex-data"}
+# Experiment temp data will be placed here.
+export CODEX_TEMP=${CODEX_TEMP:-"./codex-temp"}
+
+export UTILS_TEMP=${CODEX_TEMP}
+
+DOWNLOAD_PIDS=()
+
+# shellcheck source=./utils.sh
+source "$(dirname "$0")/utils.sh"
+
+if [[ "${CODEX_BIN}" == "" ]]; then
+    echoerr "Error: CODEX_BIN is not set. Please set it to the path of the Codex binary."
+    exit 1
+fi
 
 # Function to launch a Codex node with the specified parameters
 # Usage: launch_codex_node <node_number> <api_port> <disc_port> <bootstrap_param> <launch_mode>
@@ -9,9 +30,8 @@ launch_codex_node() {
     local api_port=$2
     local disc_port=$3
     local bootstrap_param=$4
-    local launch_mode=$5
-    local log_file="./codex-logs/codex-${node_num}.log"
-    local data_dir="./codex-data/codex-${node_num}"
+    local log_file="./${CODEX_LOGS}/codex-${node_num}.log"
+    local data_dir="./${CODEX_DATA}/codex-${node_num}"
 
     local cmd="$CODEX_BIN --nat:none --log-file=${log_file} --data-dir=${data_dir} --api-port=${api_port}"
 
@@ -27,30 +47,29 @@ launch_codex_node() {
 
     echoerr "Start Codex node ${node_num}"
 
-    if [[ "$launch_mode" == "gnometerm" ]]; then
-        # Launch in gnome-terminal
-        gnome-terminal --title="Codex Node ${node_num}" -- bash -c "${cmd}; exec bash" &
-        track_last_process
-    else
-        # Launch in background
-        ${cmd} &> /dev/null &
-        track_last_process
-    fi
+    # Launch in background
+    (${cmd} &> /dev/null; store_last_exit_code) &
+    track_last_process
 }
 
 # Function to get SPR from a Codex node with retries
+#
 # Usage: get_spr <api_port> <max_wait_seconds>
 get_spr() {
     local api_port=$1
     local max_wait_seconds=${2:-20}
-    local start_time=$(date +%s)
-    local end_time=$((start_time + max_wait_seconds))
     local spr=""
+
+    local start_time
+    start_time=$(date +%s)
+
+    local end_time
+    end_time=$((start_time + max_wait_seconds))
 
     echoerr "Attempting to get SPR from node on port ${api_port}..."
 
     while [[ $(date +%s) -lt $end_time ]]; do
-        spr=$(curl -s -m 2 -XGET localhost:${api_port}/api/codex/v1/debug/info | jq --raw-output .spr 2>/dev/null)
+        spr=$(curl -s -m 2 -XGET "localhost:${api_port}/api/codex/v1/debug/info" | jq --raw-output .spr 2>/dev/null)
 
         # Check if we got a valid SPR (not empty and not null)
         if [[ -n "$spr" && "$spr" != "null" ]]; then
@@ -67,24 +86,25 @@ get_spr() {
     return 1
 }
 
-# Function to launch the Codex network with a specified number of nodes
+# Launches a Codex network with a specified number of nodes
+#
 # Usage: launch_codex_network <number_of_nodes> [launch_mode]
 # launch_mode can be:
 #   - "regular": Launch processes in background (default)
 #   - "gnometerm": Launch each process in its own gnome-terminal
 launch_codex_network() {
-    local num_nodes=${1:-2}  # Default to 2 nodes if not specified
-    local launch_mode=${2:-"regular"}  # Default to regular mode if not specified
+    local num_nodes=${1}
 
     # Clean up any existing Codex data
-    rm -rf ./codex-data ./codex-logs
-    mkdir -p ./codex-data ./codex-logs
+    rm -rf "${CODEX_DATA}" "${CODEX_LOGS}"
+    mkdir -p "${CODEX_DATA}" "${CODEX_LOGS}"
 
     # Start node 1 (first node doesn't need bootstrap)
-    launch_codex_node 1 8080 "" "" "$launch_mode"
+    launch_codex_node 1 8080
 
     # Get the SPR from the first node with retries (try for up to 20 seconds)
-    export SPR=$(get_spr 8080 20)
+    SPR=$(get_spr 8080 20)
+    export SPR
 
     # Check if we got a valid SPR
     if [[ -z "$SPR" ]]; then
@@ -95,57 +115,98 @@ launch_codex_network() {
     echoerr "Bootstrap SPR is ${SPR}."
 
     # Start additional nodes (nodes 2 to num_nodes)
-    for i in $(seq 2 $num_nodes); do
+    for i in $(seq 2 "$num_nodes"); do
         local api_port=$((8080 + i - 1))
         local disc_port=$((8090 + i - 1))
 
-        launch_codex_node "$i" "$api_port" "$disc_port" "$SPR" "$launch_mode"
+        launch_codex_node "$i" "$api_port" "$disc_port" "$SPR"
     done
 }
 
-# Create a random file with specified block size and count
+# Creates a random file with specified block size and count in the experiment temp file.
+#
 # Usage: create_file <block_size> <block_count> [output_file]
 create_file() {
     local block_size=$1
     local block_count=$2
-    local output_file=${3:-"/tmp/testfile"}
-    
+    local output_file=${3:-"${CODEX_TEMP}/testfile"}
+
     echoerr "Creating file with block size: ${block_size}, block count: ${block_count}"
-    dd if=/dev/urandom of=${output_file} bs=${block_size} count=${block_count} &> /dev/null
-    echo ${output_file}
+    dd if=/dev/urandom of="${output_file}" bs="${block_size}" count="${block_count}" &> /dev/null
+    echo "${output_file}"
 }
 
-# Upload a file to a specified node
+# Uploads a file to a specified node. Records the upload CID and SHA1 in last_upload_cid and last_upload_sha1.
+#
 # Usage: upload <node_index> <file_path>
 # Returns: Content ID (CID) of the uploaded file
 upload() {
     local node_index=$1
-    local file_path=${2:-"/tmp/testfile"}
+    local file_path=${2:-"${CODEX_TEMP}/testfile"}
     local api_port=$((8080 + node_index - 1))
-    
+
     echoerr "Uploading file to node ${node_index} (port: ${api_port})"
-    last_upload_cid=$(curl -s -X POST -T "${file_path}" http://localhost:${api_port}/api/codex/v1/data)
-    last_upload_sha1=$(sha1sum ${file_path} | cut -d' ' -f1)
+    last_upload_cid=$(curl -s -X POST -T "${file_path}" "http://localhost:${api_port}/api/codex/v1/data")
+    last_upload_sha1=$(sha1sum "${file_path}" | cut -d' ' -f1)
     echoerr "Upload sha1 is ${last_upload_sha1}"
-    echo ${last_upload_cid}
+    echo "${last_upload_cid}"
 }
 
-# Download a file from a specified node
-# Usage: download <node_index> <cid>
+# Downloads a file from a specified node and awaits for completion.
 download() {
+    download_async "$@"
+    await_for_downloads
+}
+
+# Downloads the file registered in last_upload_cid from a specified node as a background process into 
+# "${CODEX_TEMP}/download-${node}". Logs timing information into "${CODEX_TEMP}/download-timing-${node}".
+# Async downloads can be awaited by calling `await_for_downloads`.
+#
+# Usage: download <node_index> <cid>
+download_async() {
     local node_index=$1
     local cid=${2:-${last_upload_cid}}
     local api_port=$((8080 + node_index - 1))
-    
+
     echoerr "Downloading file from node ${node_index} (port: ${api_port})"
-    curl -s -X GET "http://localhost:${api_port}/api/codex/v1/data/${cid}/network/stream" -o /tmp/testfile-download
-    last_download_sha1=$(sha1sum /tmp/testfile-download | cut -d' ' -f1)
-    echoerr "Download sha1 is ${last_download_sha1}"
+    (
+        { time curl -X GET \
+            "http://localhost:${api_port}/api/codex/v1/data/${cid}/network/stream"\
+             -o "${CODEX_TEMP}/download-${node_index}" &> "${CODEX_TEMP}/download-status-${node_index}.log" ; store_last_exit_code ; }\
+             2> "${CODEX_TEMP}/download-timing-${node_index}.log"
+    ) &
+    track_download
 }
 
+track_download() {
+    DOWNLOAD_PIDS+=($!)
+}
+
+# Awaits for all pending async downloads to complete.
+await_for_downloads() {
+    echoerr "Awaiting for downloads"
+    for pid in "${DOWNLOAD_PIDS[@]}"; do
+        echoerr "Waiting for download process: [$pid]"
+        if ! wait "$pid"; then
+            echoerr "Download process $pid failed"
+            exit 1
+        fi
+    done
+    DOWNLOAD_PIDS=()
+    echoerr "All downloads completed"
+}
+
+# Checks the last download issued to node $1 for SHA1 mismatch with the last upload.
+# If the SHA1 of the downloaded file does not match the last upload's SHA1, it prints an error and exits.
+#
+# Usage: check_download <node_index>
 check_download() {
-    if [ "${last_download_sha1}" != "${last_upload_sha1}" ]; then
-        echoerr "Download failed: SHA1 mismatch (${last_download_sha1} != ${last_upload_sha1})"
+    local node_index=$1
+    local download_sha
+    download_sha=$(sha1sum "${CODEX_TEMP}/download-${node_index}" | cut -d' ' -f1)
+
+    if [ "${download_sha}" != "${last_upload_sha1}" ]; then
+        echoerr "Download failed for node ${node_index}: SHA1 mismatch (${download_sha} != ${last_upload_sha1})"
         exit 1
     fi
 }
