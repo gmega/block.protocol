@@ -8,12 +8,10 @@ set -e -o pipefail
 # shellcheck source=./codex.sh
 source "$(dirname "$0")/codex.sh"
 
-setup_process_tracking
-
 # Default values
 N_REPS=${N_REPS:-10}
 FILE_SIZE_MB=(10)
-NUM_NODES=${NUM_NODES:-3}  # Default to 3 nodes if not specified
+NUM_NODES=${NUM_NODES:-5}  # Default to 3 nodes if not specified
 
 # Parse command-line arguments
 OUTPUT_LOG="${1:-k-nodes-experiment.csv}"  # Default log name if not specified
@@ -34,18 +32,20 @@ fi
 rm -rf "${CODEX_TEMP}" "${CODEX_DATA}" "${CODEX_LOGS}"
 mkdir -p "${CODEX_TEMP}" "${CODEX_DATA}" "${CODEX_LOGS}"
 
+setup_process_tracking
+
 # Launch the Codex network with k nodes and specified launch mode
 launch_codex_network "$NUM_NODES" "$LAUNCH_MODE"
 
 # Prepare the output log header
-echo "block_count,run,node,wallclock,user,system" > "${OUTPUT_LOG}"
+echo "file_size,run,node,wallclock,user,system" > "${OUTPUT_LOG}"
 
-for block_count in "${FILE_SIZE_MB[@]}"; do
+for file_size in "${FILE_SIZE_MB[@]}"; do
     for i in $(seq 1 "${N_REPS}"); do
-        echoerr "Running experiment ${i}/${N_REPS} - blockcount: ${block_count} with ${NUM_NODES} nodes"
+        echoerr "Running experiment ${i}/${N_REPS} - blockcount: ${file_size} with ${NUM_NODES} nodes"
 
         # Create random file
-        create_file "1M" "${block_count}"
+        create_file "1M" "${file_size}"
 
         # Uploads to node 1
         upload 1
@@ -53,7 +53,7 @@ for block_count in "${FILE_SIZE_MB[@]}"; do
         # Start concurrent downloads from all nodes except node 1
         for node in $(seq 2 "${NUM_NODES}"); do
             # String for formatting download timings for this node.
-            export TIMEFORMAT="${block_count},${i},${node},%E,%U,%S"
+            export TIMEFORMAT="${file_size},${i},${node},%E,%U,%S"
 
             download_async "${node}" "${last_upload_cid}"
         done

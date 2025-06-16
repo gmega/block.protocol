@@ -11,12 +11,15 @@ export CODEX_DATA=${CODEX_DATA:-"./codex-data"}
 # Experiment temp data will be placed here.
 export CODEX_TEMP=${CODEX_TEMP:-"./codex-temp"}
 
-export UTILS_TEMP=${CODEX_TEMP}
+export ENABLE_MONITORING=${ENABLE_MONITORING:-true}
 
+export UTILS_TEMP=${CODEX_TEMP}
 DOWNLOAD_PIDS=()
 
 # shellcheck source=./utils.sh
 source "$(dirname "$0")/utils.sh"
+# shellcheck source=./monitoring.sh
+source "$(dirname "$0")/monitoring.sh"
 
 if [[ "${CODEX_BIN}" == "" ]]; then
     echoerr "Error: CODEX_BIN is not set. Please set it to the path of the Codex binary."
@@ -24,12 +27,13 @@ if [[ "${CODEX_BIN}" == "" ]]; then
 fi
 
 # Function to launch a Codex node with the specified parameters
-# Usage: launch_codex_node <node_number> <api_port> <disc_port> <bootstrap_param> <launch_mode>
+# Usage: launch_codex_node <node_number> <api_port> <disc_port> <metrics_port> <bootstrap_param>
 launch_codex_node() {
     local node_num=$1
     local api_port=$2
     local disc_port=$3
-    local bootstrap_param=$4
+    metrics_port=$4
+    local bootstrap_param=$5
     local log_file="./${CODEX_LOGS}/codex-${node_num}.log"
     local data_dir="./${CODEX_DATA}/codex-${node_num}"
 
@@ -40,6 +44,11 @@ launch_codex_node() {
         cmd="${cmd} --disc-port=${disc_port}"
     fi
 
+    # Add metrics port if provided
+    if [[ -n "$metrics_port" ]]; then
+        cmd="${cmd} --metrics --metrics-port=${metrics_port}"
+    fi
+
     # Add bootstrap parameter if provided
     if [[ -n "$bootstrap_param" ]]; then
         cmd="${cmd} --bootstrap-node=${bootstrap_param}"
@@ -47,8 +56,20 @@ launch_codex_node() {
 
     echoerr "Start Codex node ${node_num}"
 
+    export metrics_port
+
     # Launch in background
-    (${cmd} &> /dev/null; store_last_exit_code) &
+    (
+        if [[ -n "$metrics_port" ]]; then
+            start_monitoring_node "${metrics_port}"
+        fi
+        ${cmd} &> /dev/null
+        exit_code="$?"
+        if [[ -n "$metrics_port" ]]; then
+            stop_monitoring_node "${metrics_port}"
+        fi
+        store_exit_code "${exit_code}"
+    ) &
     track_last_process
 }
 
@@ -117,10 +138,29 @@ launch_codex_network() {
     # Start additional nodes (nodes 2 to num_nodes)
     for i in $(seq 2 "$num_nodes"); do
         local api_port=$((8080 + i - 1))
-        local disc_port=$((8090 + i - 1))
+        local disc_port=$((8190 + i - 1))
+        local metrics_port=$((8290 + i - 1))
 
-        launch_codex_node "$i" "$api_port" "$disc_port" "$SPR"
+        launch_codex_node "$i" "$api_port" "$disc_port" "$metrics_port" "$SPR"
+        await_for_node "$api_port" 10
     done
+}
+
+await_for_node() {
+    local api_port=$1
+    local timeout=$2
+    local start_time
+    start_time=$(date +%s)
+    local end_time
+    end_time=$((start_time + "$timeout"))
+    while [[ $(date +%s) -lt $end_time ]]; do
+        if curl -s -XGET "localhost:${api_port}/api/codex/v1/debug/info" > /dev/null; then
+            return 0
+        fi
+        sleep 1
+    done
+    echoerr "ERROR: Could not get SPR from node on port ${api_port}. Exiting."
+    exit 1
 }
 
 # Creates a random file with specified block size and count in the experiment temp file.
